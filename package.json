@@ -1,0 +1,26 @@
+{
+  "name": "piepa-paypal-ai-hackathon",
+  "version": "0.3.0-stage-2b",
+  "private": false,
+  "description": "PIEPA — AI-assisted, human-authorised payment instruction demonstration for PayPal Sandbox",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "clean": "node -e \"process.exit(0)\"",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "check": "npm run typecheck && npm test",
+    "verify:paypal-sandbox": "npm run build && node --use-system-ca scripts/verify-paypal-sandbox.mjs",
+    "create:paypal-sandbox-order": "npm run build && node --use-system-ca scripts/create-paypal-sandbox-order.mjs",
+    "webhook:local": "npm run build && node --use-system-ca scripts/run-local-webhook-receiver.mjs",
+    "webhook:manage": "node --use-system-ca scripts/manage-paypal-sandbox-webhook.mjs",
+    "demo": "npm run build && node scripts/run-stage2a-demo.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "typescript": "^5.4.5"
+  }
+}
