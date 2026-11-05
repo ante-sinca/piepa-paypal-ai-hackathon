@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { generateKeyPairSync } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildSwitchboardInstruction, DemoWorkflowService, historicalEvidence, LocalDurableLedger, LocalProposalStore, recoveredInstructionInventory, renderedPage, SyntheticInstructionDraftingAgent } from "../src/index.js";
+import { buildSwitchboardInstruction, createStage2aDemoServer, DemoWorkflowService, historicalEvidence, LocalDurableLedger, LocalProposalStore, recoveredInstructionInventory, renderedPage, SyntheticInstructionDraftingAgent } from "../src/index.js";
 
 const form = { transactionType: "payout", amount: "100.00", recipientName: "Ana Santos", recipientReference: "PH-DEMO-001", destinationType: "MOCK", purpose: "family housing support", mode: "synthetic" };
 
@@ -14,6 +16,21 @@ async function workflow(t: test.TestContext) {
   const service = new DemoWorkflowService(new LocalDurableLedger(join(directory, "ledger.json")), new LocalProposalStore(join(directory, "proposals.json")), new SyntheticInstructionDraftingAgent(), keys);
   t.after(() => rm(directory, { recursive: true, force: true }));
   return service;
+}
+
+async function listenEphemeral(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("EPHEMERAL_SERVER_ADDRESS_UNAVAILABLE");
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function close(server: Server): Promise<void> {
+  server.closeAllConnections?.();
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
 
 test("Stage 3B form preserves operator financial fields and reaches the existing approval/signing/mock lifecycle", async (t) => {
@@ -99,17 +116,67 @@ test("recovery uses the explicit instruction reference and restores only read-on
   assert.match(page, /option value="'\+escAttribute\(item\.instructionReference\)/);
   assert.match(page, /filter\(item=>item\.instructionReference===reference\)/);
   assert.match(page, /matches\.length!==1/);
-  assert.match(page, /select\.value=candidate\.instructionReference/);
+  assert.match(page, /function loadPersistedInstructionInventory\(\)/);
+  assert.doesNotMatch(page, /void loadMostRecentPersistedTransaction\(\)/);
   assert.match(page, /addEventListener\('change'/);
-  assert.match(page, /ledgerState==='RECONCILED'/);
   assert.match(page, /Verified PayPal Order ID/);
   assert.match(page, /Verified PayPal Merchant ID/);
   assert.match(page, /Verified PayPal Capture ID/);
   assert.match(page, /Mock execution reference/);
   assert.match(page, /copy-control/);
   assert.match(page, /Recovered persisted instruction read-only/);
-  const recovery = page.match(/function recoverSelectedInstruction\(\).*?(?=async function loadMostRecentPersistedTransaction)/s)?.[0] ?? "";
+  const recovery = page.match(/function recoverSelectedInstruction\(\).*?(?=async function loadPersistedInstructionInventory)/s)?.[0] ?? "";
   assert.doesNotMatch(recovery, /orders-payment-session|method:'POST'/);
+});
+
+test("clean startup defaults are safe, makes Ollama selection conditional, and never restores a transaction", () => {
+  const page = renderedPage();
+  assert.match(page, /id="amount" inputmode="decimal" value="1\.00"/);
+  assert.match(page, /Complete the switchboard and generate a new instruction\./);
+  assert.match(page, /A transaction receipt will appear after the instruction has been processed\./);
+  assert.match(page, /function initialiseDraftingMode\(\)/);
+  assert.match(page, /state\.genuineAiAvailable/);
+  assert.match(page, /select\.value='ollama'/);
+  assert.match(page, /select\.value='synthetic'/);
+  assert.match(page, /Generation starts only when you select GENERATE NEW INSTRUCTION/);
+  assert.match(page, /function loadPersistedInstructionInventory\(\)/);
+  const inventory = page.match(/function loadPersistedInstructionInventory\(\).*?(?=async function initialiseDraftingMode)/s)?.[0] ?? "";
+  assert.doesNotMatch(inventory, /recoverSelectedInstruction\(/);
+  assert.doesNotMatch(inventory, /method:'POST'/);
+  assert.doesNotMatch(page, /void loadMostRecentPersistedTransaction/);
+});
+
+test("clean startup keeps the empty lifecycle, manual recovery, and payment controls separate", () => {
+  const page = renderedPage();
+  assert.match(page, /lifecycle\(\);/);
+  assert.match(page, /RECOVER SELECTED INSTRUCTION/);
+  assert.match(page, /Recovered persisted instruction read-only/);
+  assert.match(page, /async function generate\(\).*current=signature=runResult=undefined/s);
+  assert.match(page, /Selecting PayPal Sandbox does not make a request/);
+  assert.match(page, /No replacement Order will be created/);
+  assert.match(page, /@media\(max-width:760px\).*transaction-summary.*grid-template-columns:1fr/);
+});
+
+test("Ollama startup status requires the configured local model to appear in the read-only inventory", async (t) => {
+  const ollama = createServer((request, response) => {
+    assert.equal(request.url, "/api/tags");
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ models: [{ name: "judge-model:latest" }] }));
+  });
+  const ollamaUrl = await listenEphemeral(ollama); t.after(() => close(ollama));
+  // SQLite keeps its connection open for the server lifetime. Use the OS temp
+  // directory so its process-exit cleanup cannot leave repository artifacts.
+  const dataRoot = await mkdtemp(join(tmpdir(), "piepa-ollama-status-"));
+  const availableServer = createStage2aDemoServer(dataRoot, { HBIEPA_AI_PROVIDER: "ollama", HBIEPA_OLLAMA_BASE_URL: ollamaUrl, HBIEPA_OLLAMA_MODEL: "judge-model:latest" });
+  const availableUrl = await listenEphemeral(availableServer); t.after(() => close(availableServer));
+  const available = await fetch(`${availableUrl}/api/status`).then(async (response) => response.json()) as { genuineAiConfigured: boolean; genuineAiAvailable: boolean; genuineAiStatus: string };
+  assert.deepEqual(available, { genuineAiConfigured: true, genuineAiAvailable: true, provider: "OLLAMA_LOCAL", model: "judge-model:latest", offlineMode: "SYNTHETIC_AI_DEMO", genuineAiStatus: "LOCAL_MODEL_AVAILABLE_FOR_OPERATOR_INITIATED_INFERENCE" });
+  const unavailableServer = createStage2aDemoServer(`${dataRoot}-unavailable`, { HBIEPA_AI_PROVIDER: "ollama", HBIEPA_OLLAMA_BASE_URL: ollamaUrl, HBIEPA_OLLAMA_MODEL: "missing-model:latest" });
+  const unavailableUrl = await listenEphemeral(unavailableServer); t.after(() => close(unavailableServer));
+  const unavailable = await fetch(`${unavailableUrl}/api/status`).then(async (response) => response.json()) as { genuineAiConfigured: boolean; genuineAiAvailable: boolean; genuineAiStatus: string };
+  assert.equal(unavailable.genuineAiConfigured, true);
+  assert.equal(unavailable.genuineAiAvailable, false);
+  assert.equal(unavailable.genuineAiStatus, "LOCAL_MODEL_UNAVAILABLE");
 });
 
 test("recovery presentation distinguishes an unavailable historical-evidence read from a successful read", () => {
