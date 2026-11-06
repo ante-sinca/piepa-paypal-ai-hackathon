@@ -26,7 +26,7 @@ A demo video of PIEPA can be found here: [PIEPA — YouTube Demonstration](https
 
 ## Quick start
 
-Prerequisite: Node.js 20 or newer.
+Prerequisite: Node.js 22.16.0 or newer.
 
 ```sh
 git clone https://github.com/ante-sinca/piepa-paypal-ai-hackathon.git
