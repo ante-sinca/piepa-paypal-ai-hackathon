@@ -21,6 +21,9 @@ The answer demonstrated here is architectural, not a production remittance offer
 
 The judge-facing interface deliberately separates the normal workflow from its technical/recovery details. It binds to `127.0.0.1` only.
 
+A demo video of can be found here: https://www.youtube.com/watch?v=ffQob-yoTKs
+
+
 ## Quick start
 
 Prerequisite: Node.js 20 or newer.
