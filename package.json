@@ -5,7 +5,7 @@
   "description": "PIEPA — AI-assisted, human-authorised payment instruction demonstration for PayPal Sandbox",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.16.0"
   },
   "scripts": {
     "clean": "node -e \"process.exit(0)\"",
